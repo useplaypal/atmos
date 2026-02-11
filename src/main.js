@@ -2,103 +2,79 @@
 // Boost with free budget. Crash on asteroid. Cash out in black hole.
 // Per-life wallet + kill feed + receipts. "Last hit wins" kill credit window.
 import { drawGhostCountdown } from './ui/overlays.js';
+import {
+  ACCIDENT_CREDIT_WINDOW_MS,
+  ACCIDENT_HOUSE_PCT,
+  ASTEROID_COUNT,
+  BANK_PULSE_SEC,
+  BANK_ROTATE_SEC,
+  BANK_SHRINK_MIN_SCALE,
+  BANK_SHRINK_SEC,
+  BH_COUNT,
+  BH_WALL_RESTITUTION,
+  BOOST_MIN_WALLET_CENTS,
+  BOOST_MULT,
+  BOT_AVOID_AST_R,
+  BOT_COUNT,
+  BOT_WANDER_SEC,
+  BOUNCE_RESTITUTION,
+  BUMP_STUN_ATTACKER,
+  BUMP_STUN_DEFENDER,
+  CASHOUT_FEE_PCT,
+  COLLISION_PAD,
+  FREE_CAP_SEC,
+  FREE_REFILL_RATE,
+  GHOST_ALPHA,
+  GHOST_MS,
+  HIGH_SPEED_RELAX,
+  INNER_IGNORE_PX,
+  KNOCKBACK_DAMP,
+  MIN_IMPULSE,
+  NEAR_REPEL,
+  PLAYER_BUMP_ATTACKER_PCT,
+  PLAYER_BUMP_BASE,
+  PLAYER_BUMP_SPEED_SCALE,
+  SEPARATION_BIAS,
+  SHAKE_HIT,
+  SHAKE_TIME,
+  SMOOTH_MS,
+  SNAP_ANGLE_DEG,
+  SPEED_CAP_AFTER,
+  SPEED_FLOOR_AFTER,
+  TICK_SECONDS,
+  UFO_R,
+  WORLD_SIZE,
+  BOOST_BUMP_MULT,
+} from './game/constants.js';
+import {
+  angleLerp,
+  angleTo,
+  clamp,
+  deltaWrap,
+  distWrap,
+  fmt$,
+  lerp,
+  lerpColor,
+  mod,
+  nowMs,
+  rnd,
+  TAU,
+  wrapDelta,
+  wrapPos,
+} from './game/utils.js';
+import { makeAsteroid, makeBot, makeHole, makePlayer } from './game/entities.js';
+import { createGameUI } from './ui/game-ui.js';
 
 // ---------- Canvas ----------
 const canvas = document.getElementById('game');
 const ctx     = canvas.getContext('2d');
 const hud     = document.getElementById('hud');
-// IMPORTANT: don't grab #feed here; we create/style it later:
-let feedEl = null;
-
 let W = window.innerWidth, H = window.innerHeight;
 canvas.width = W; canvas.height = H;
 window.addEventListener('resize', () => {
   W = window.innerWidth; H = window.innerHeight;
   canvas.width = W; canvas.height = H;
 });
-
-
-// ---------- Tunables (your latest) ----------
-const WORLD_SIZE      = 6000;
-
-// Sizes / counts
-const UFO_R           = 22.5;    // player size
-const ASTEROID_COUNT  = 85;
-const AST_R_MIN       = 80, AST_R_MAX = 150;
-const AST_SPEED_MIN   = 10, AST_SPEED_MAX = 50;
-
-const BH_COUNT        = 2;
-const BH_R            = 180;
-
-// Steering feel
-const SNAP_ANGLE_DEG  = 25;
-const SMOOTH_MS       = 0.08;
-const INNER_IGNORE_PX = 22;
-
-// Boost
-const BOOST_MULT         = 1.55;
-// Free boost energy (seconds)
-const FREE_CAP_SEC       = 3.0;            // total free-seconds available
-const FREE_RECHARGE_SEC  = 3.0;            // time (sec) to fully recharge when NOT boosting
-const FREE_REFILL_RATE   = FREE_CAP_SEC / FREE_RECHARGE_SEC; // sec per sec
-// Backwards-compat alias so existing code using FREE_CAP keeps working
-const FREE_CAP           = FREE_CAP_SEC;
-// Billing cadence (how often $0.01 is charged during paid boost)
-const TICK_SECONDS       = 0.15;           // 50% slower burn vs 0.10s
-
-
-// Banks rotation + visuals
-const BANK_ROTATE_SEC  = 45;
-const BANK_PULSE_SEC   = 10;       // cash-out allowed entire pulse window
-const BANK_SHRINK_SEC  = 5;        // last 5s of cycle shrink
-
-// At the very end of the cycle, bank radius shrinks to this fraction
-// of its original size (0.20 = 80% shrink, 20% of original radius).
-const BANK_SHRINK_MIN_SCALE = 0.20;
-
-// Bots (testing)
-const BOT_COUNT        = 15;
-const BOT_R            = UFO_R;
-const BOT_SPEED        = 225;
-const BOT_WANDER_SEC   = [0.8, 1.8];
-const BOT_AVOID_AST_R  = 125;
-
-// Bumps (springy)
-const COLLISION_PAD            = 10;
-const PLAYER_BUMP_BASE         = 400;
-const PLAYER_BUMP_SPEED_SCALE  = 1.5;
-const PLAYER_BUMP_ATTACKER_PCT = 0.50;
-const BOOST_BUMP_MULT          = 1.8;
-const BUMP_STUN_DEFENDER       = 0.35;
-const BUMP_STUN_ATTACKER       = 0.10;
-const KNOCKBACK_DAMP           = 4.0;
-
-// Kill credit window
-const KILL_CREDIT_WINDOW_SEC   = 2.5;
-
-// Asteroid pinball
-const BOUNCE_RESTITUTION = 1.25;
-const SEPARATION_BIAS    = 1.15;
-const MIN_IMPULSE        = 12;
-const SPEED_FLOOR_AFTER  = 35;
-const SPEED_CAP_AFTER    = 120;
-const HIGH_SPEED_RELAX   = 2.2;
-const NEAR_REPEL         = 20;
-
-// Asteroid vs Black-hole (holes are rigid walls)
-const BH_WALL_RESTITUTION = 1.25;
-
-// Wallet (per life)
-const START_STAKE        = 1.00; // dollars
-// Boost spend floor (prevents burning the whole buy-in)
-const BOOST_MIN_WALLET_FRAC  = 0.50;   // cannot burn below 50% of original stake
-const BOOST_MIN_WALLET_CENTS = toCents(START_STAKE * BOOST_MIN_WALLET_FRAC);
-// ---------- House / bonus pot ----------
-const CASHOUT_FEE_PCT = 0.05;   // 5% to start (tunable)
-const GHOST_MS    = 5000;
-const GHOST_ALPHA = 0.35;
-const ACCIDENT_CREDIT_WINDOW_MS = 2000; // 2s window for "you caused it"
-const ACCIDENT_HOUSE_PCT = 0.75;       // 75% house, 25% bonus
 
 let houseCents = 0;
 let bonusPotCents = 0;
@@ -108,67 +84,6 @@ const econLog = [];
 function logEcon(kind, data={}) {
   econLog.push({ t: Math.round(nowMs()), kind, ...data, houseCents, bonusPotCents });
   if (econLog.length > 200) econLog.shift();
-}
-
-// FX
-const SHAKE_HIT   = 7;
-const SHAKE_TIME  = 0.12;
-
-// ---------- Helpers ----------
-const TAU = Math.PI * 2;
-const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
-const lerp  = (a, b, t) => a + (b - a) * t;
-const rnd   = (a, b) => a + Math.random() * (b - a);
-const nowMs = () => performance.now();
-function wrap01(v) {
-  v = v % WORLD_SIZE;
-  return v < 0 ? v + WORLD_SIZE : v;
-}
-
-function mod(n, m) {
-  return ((n % m) + m) % m;
-}
-
-function wrapPos(o) {
-  o.x = wrap01(o.x);
-  o.y = wrap01(o.y);
-}
-
-function toCents(d) { return Math.round(d * 100); }
-const fmt$      = c => `$${(c/100).toFixed(2)}`;
-const angleLerp = (a, b, t) => {
-  let d = (b - a + Math.PI) % (TAU) - Math.PI;
-  return a + d * t;};
-
-// Color helpers for boost bar
-function lerpColor(a, b, t) {
-  return [
-    Math.round(a[0] + (b[0] - a[0]) * t),
-    Math.round(a[1] + (b[1] - a[1]) * t),
-    Math.round(a[2] + (b[2] - a[2]) * t),
-  ];
-}
-
-// Map free-boost ratio (0..1) -> color (RGB array)
-function boostColorForRatio(ratio) {
-  ratio = clamp(ratio, 0, 1);
-
-  const FULL  = [120, 190, 255]; // bright blue
-  const MID   = [255, 210, 120]; // warm yellow
-  const EMPTY = [255, 120, 120]; // red-ish
-
-  if (ratio >= 0.7) {
-    // 70%+: mostly full blue
-    return FULL;
-  } else if (ratio >= 0.3) {
-    // 30–70%: fade from yellow -> blue
-    const t = (ratio - 0.3) / 0.4; // 0 at 0.3, 1 at 0.7
-    return lerpColor(MID, FULL, t);
-  } else {
-    // 0–30%: fade from red -> yellow (feels "danger zone")
-    const t = ratio / 0.3; // 0 at 0, 1 at 0.3
-    return lerpColor(EMPTY, MID, t);
-  }
 }
 
 // ---------- Camera ----------
@@ -191,237 +106,12 @@ let asteroids = [];
 let holes     = [];   // banks / black holes
 let bots      = [];
 let entities  = [];   // convenience: [player, ...bots]
+const ui = createGameUI();
 
 let bankTimer = 0;  // counts up to BANK_ROTATE_SEC, last BANK_PULSE_SEC is "pulse"
 let receipt   = null;
 let state     = 'play'; // 'play' | 'event'
 
-// ---- Kill/Event feed + Boost bar (UI) ----
-const FEED_MAX = 6;
-let feed = [];
-// feedEl declared near the canvas setup; reuse it here without redeclaring
-
-// Boost bar DOM references
-let boostBarEl   = null; // outer bar container
-let boostFillEl  = null; // inner fill bar
-let boostLabelEl = null; // text label above the bar
-
-// Boost bar visual state
-let lastBoostRatio   = 1;   // last 0..1 free-boost ratio (for detecting refill)
-let boostFlashUntil  = 0;   // timestamp (ms) until which we keep the "full" flash
-
-
-function ensureUI() {
-  ensureFeedPanel();
-  ensureBoostBar();
-}
-
-
-/* ---------- Feed panel ---------- */
-function ensureFeedPanel() {
-  if (feedEl) return;
-
-  // reuse if it exists, otherwise create it
-  feedEl = document.getElementById('feed');
-  if (!feedEl) {
-    feedEl = document.createElement('div');
-    feedEl.id = 'feed';
-    document.body.appendChild(feedEl);
-  }
-  Object.assign(feedEl.style, {
-    position: 'fixed',
-    right: '12px',
-    top: '12px',
-    width: '320px',
-    font: '12px system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
-    color: '#9db6c9',
-    lineHeight: '1.35',
-    textAlign: 'right',
-    pointerEvents: 'none',
-    zIndex: 10000,
-  });
-}
-
-function pushFeed(html) {
-  feed.unshift({ html, t: performance.now() });
-  while (feed.length > FEED_MAX) feed.pop();
-  renderFeed();
-}
-
-function renderFeed() {
-  if (!feedEl) return;
-  const lines = feed.map(f => `<div class="row">${f.html}</div>`).join('');
-  feedEl.innerHTML = lines;
-}
-
-/* ---------- Boost bar ---------- */
-/* ---------- Boost bar ---------- */
-function ensureBoostBar() {
-  if (boostBarEl) return;
-
-  // Put the boost bar directly on <body>, independent of #hud text updates
-  const parent = document.body;
-
-  // Outer bar container (#boostbar)
-  boostBarEl = document.getElementById('boostbar');
-  if (!boostBarEl) {
-    boostBarEl = document.createElement('div');
-    boostBarEl.id = 'boostbar';
-    parent.appendChild(boostBarEl);
-  }
-  Object.assign(boostBarEl.style, {
-    position: 'fixed',          // fixed to viewport, not relative to #hud
-    right: '12px',
-    bottom: '12px',
-    width: '240px',
-    height: '12px',
-    borderRadius: '999px',
-    background: 'rgba(255,255,255,0.08)',
-    boxShadow: '0 0 1px rgba(160,160,255,0.35) inset, 6px 18px rgba(0,0,0,0.35)',
-    overflow: 'hidden',
-    pointerEvents: 'none',
-    zIndex: 10000,              // on top of canvas
-  });
-
-  // Inner fill (#boostfill)
-  boostFillEl = document.getElementById('boostfill');
-  if (!boostFillEl) {
-    boostFillEl = document.createElement('div');
-    boostFillEl.id = 'boostfill';
-    boostBarEl.appendChild(boostFillEl);
-  }
-  Object.assign(boostFillEl.style, {
-  position: 'absolute',
-  left: '0',
-  top: '0',
-  height: '100%',
-  width: '100%', // initially full
-  backgroundColor: 'rgba(120,190,255,0.95)', // will be updated dynamically
-  boxShadow: '0 0 16px rgba(80,160,255,0.35)',
-  transition: 'width 80ms linear, opacity 120ms linear, background-color 150ms linear, box-shadow 150ms linear',
-});
-
-  // Label (#boostlbl)
-  boostLabelEl = document.getElementById('boostlbl');
-  if (!boostLabelEl) {
-    boostLabelEl = document.createElement('div');
-    boostLabelEl.id = 'boostlbl';
-    boostBarEl.appendChild(boostLabelEl);
-  }
-  Object.assign(boostLabelEl.style, {
-    position: 'absolute',
-    left: '12px',
-    top: '-22px',
-    font: '12px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
-    color: '#9db6c9',
-    textShadow: '0 1px 0 rgba(0,0,0,0.45)',
-    pointerEvents: 'none',
-  });
-
-  boostLabelEl.textContent = 'Free boost: 100%';
-}
-
-//* ---------- Boost bar updater ---------- *//
-function updateBoostBar(p) {
-  if (!boostBarEl || !boostFillEl || !boostLabelEl) return;
-
-  const now   = nowMs();
-  const ratio = clamp(p.freeBudget / FREE_CAP_SEC, 0, 1);  // 0..1
-  const pct   = Math.round(ratio * 100);
-
-  // Detect "full recharge" flash:
-  // if we were not full before, and we just reached (almost) full now
-  if (lastBoostRatio < 0.999 && ratio >= 0.999) {
-    boostFlashUntil = now + 300; // flash for 300ms
-  }
-
-  // Base glow strength
-  let glow = 0.35;
-  if (now < boostFlashUntil) {
-    glow = 0.9; // stronger glow during flash
-  }
-
-  // Pick color based on ratio (fades from blue -> yellow -> red near empty)
-  const [r, g, b] = boostColorForRatio(ratio);
-
-  // Apply visuals
-  boostFillEl.style.width        = pct + '%';
-  boostFillEl.style.opacity      = ratio > 0 ? '1' : '0.25'; // faint when empty
-  boostFillEl.style.backgroundColor = `rgba(${r},${g},${b},0.98)`;
-  boostFillEl.style.boxShadow    = `0 0 18px rgba(${r},${g},${b},${glow})`;
-
-  boostLabelEl.textContent = 'Free boost: ' + pct + '%';
-
-  // Remember for next frame
-  lastBoostRatio = ratio;
-}
-
-
-// ---------- Player / Wallet ----------
-function makeWallet() {
-  return {
-    start: toCents(START_STAKE),
-    wallet: toCents(START_STAKE),
-    boosts: 0,     // cents spent on boosts
-    kills: 0,      // cents won from kills
-    rake: 0,       // (placeholder if you want per-kill rake later)
-    jackpot: 0     // (placeholder, accidental deaths contribution etc.)
-  };
-}
-
-function makePlayer(x, y, r, speed) {
-  return {
-    type: 'player',
-    id: 'you',
-    x, y, r, speed,
-    heading: 0,
-    targetAngle: 0,
-    boostHeld: false,
-    freeBudget: FREE_CAP,
-    paidAccum: 0,
-    velX: 0, velY: 0,           // knockback velocity
-    stun: 0,
-    lastHitBy: null,
-    lastHitAt: -1,
-    alive: true,
-    wallet: makeWallet()
-  };
-}
-
-function makeBot(i) {
-  const x = rnd(0, WORLD_SIZE), y = rnd(0, WORLD_SIZE);
-  return {
-    type: 'bot',
-    id: 'bot'+i,
-    x, y, r: BOT_R, speed: BOT_SPEED,
-    heading: rnd(0, TAU),
-    targetAngle: rnd(0, TAU),
-    nextWanderT: rnd(BOT_WANDER_SEC[0], BOT_WANDER_SEC[1]),
-    boostHeld: false,
-    freeBudget: FREE_CAP,
-    paidAccum: 0,
-    velX: 0, velY: 0,
-    stun: 0,
-    lastHitBy: null,
-    lastHitAt: -1,
-    alive: true,
-    wallet: makeWallet()
-  };
-}
-
-function makeAsteroid() {
-  return {
-    x: rnd(0, WORLD_SIZE),
-    y: rnd(0, WORLD_SIZE),
-    r: rnd(AST_R_MIN, AST_R_MAX),
-    vx: rnd(AST_SPEED_MIN, AST_SPEED_MAX) * (Math.random() < .5 ? -1 : 1),
-    vy: rnd(AST_SPEED_MIN, AST_SPEED_MAX) * (Math.random() < .5 ? -1 : 1)
-  };
-}
-
-function makeHole() {
-  return { x: rnd(0, WORLD_SIZE), y: rnd(0, WORLD_SIZE), r: BH_R };
-}
 
 // ---------- Input / steering ----------
 const pointer = { x: W/2, y: H/2 };
@@ -451,30 +141,6 @@ window.addEventListener('keyup', e => { if (e.code === 'Space') { e.preventDefau
 canvas.addEventListener('click', () => { if (state !== 'play') respawn(); });
 
 // ---------- Bump logic ----------
-function angleTo(ax, ay, bx, by) {
-  const { dx, dy } = deltaWrap(ax, ay, bx, by);
-  return Math.atan2(dy, dx);
-}
-
-function distWrap(ax, ay, bx, by) {
-  const { dx, dy } = deltaWrap(ax, ay, bx, by);
-  return Math.hypot(dx, dy);
-}
-
-// Smallest wrapped delta from a -> b on a torus (WORLD_SIZE)
-function wrapDelta(d) {
-  // use mod() to avoid JS negative % issues
-  return mod(d + WORLD_SIZE / 2, WORLD_SIZE) - WORLD_SIZE / 2;
-}
-
-function deltaWrap(ax, ay, bx, by) {
-  // IMPORTANT: this is b - a (vector from A to B)
-  return {
-    dx: wrapDelta(bx - ax),
-    dy: wrapDelta(by - ay),
-  };
-}
-
 function applyBump(att, def) {
   const now = nowMs();
 
@@ -527,7 +193,7 @@ function spendBoostCent(p) {
 
   if (p.id === 'you') {
     const atFloor = (p.wallet.wallet === BOOST_MIN_WALLET_CENTS);
-    pushFeed(`<b>Boost</b> <span class="neg">- $0.01</span>${atFloor ? ' <i>(floor)</i>' : ''}`);
+    ui.pushFeed(`<b>Boost</b> <span class="neg">- $0.01</span>${atFloor ? ' <i>(floor)</i>' : ''}`);
   }
 }
 function awardKill(killer, victim) {
@@ -537,9 +203,9 @@ function awardKill(killer, victim) {
   killer.wallet.wallet += amount;
   victim.wallet.wallet = 0;
   if (killer.id === 'you') {
-    pushFeed(`Eliminated <b>${victim.id}</b> <span class="amt">+ ${fmt$(amount)}</span>`);
+    ui.pushFeed(`Eliminated <b>${victim.id}</b> <span class="amt">+ ${fmt$(amount)}</span>`);
   } else if (victim.id === 'you') {
-    pushFeed(`You were eliminated by <b>${killer.id}</b> <span class="neg">- ${fmt$(amount)}</span>`);
+    ui.pushFeed(`You were eliminated by <b>${killer.id}</b> <span class="neg">- ${fmt$(amount)}</span>`);
   }
 }
 
@@ -677,19 +343,15 @@ function setup() {
 
   player = makePlayer(WORLD_SIZE/2, WORLD_SIZE/2, UFO_R, 260);
   startGhost(player);
-  bots   = Array.from({length: BOT_COUNT}, (_,i)=> makeBot(i+1));
+  bots   = Array.from({length: BOT_COUNT}, (_,i)=> makeBot(i+1, BOT_WANDER_SEC));
   entities = [player, ...bots];
 
-    // Reset boost bar visual state each life
-  lastBoostRatio  = 1;
-  boostFlashUntil = 0;
 
   state = 'play';
   receipt = null;
 
-  ensureUI();    // creates feed panel + boost bar
-  feed.length = 0;
-  renderFeed();
+  ui.ensureUI();    // creates feed panel + boost bar
+  ui.resetRoundUI();
 
   bankTimer = 0;
 }
@@ -981,7 +643,7 @@ if (p.boostHeld) {
         } else {
           accidentalSplit(p);
           if (p.id === 'you') {
-            pushFeed(`Accidental death <span class="neg">- your wallet</span>`);
+            ui.pushFeed(`Accidental death <span class="neg">- your wallet</span>`);
           }
         }
 
@@ -1188,7 +850,7 @@ const txt =
 hud.textContent = txt;
 
   // Update free–boost bar
-  updateBoostBar(player);
+  ui.updateBoostBar(player);
 
   // --- Event overlay (receipt) ---
 if (state !== 'play' && receipt) {
